@@ -1,7 +1,7 @@
 from copy import deepcopy
 
-from basicsr.utils import get_root_logger
-from basicsr.utils.registry import LOSS_REGISTRY
+from submodules.CodeFormer.basicsr.utils import get_root_logger
+from submodules.CodeFormer.basicsr.utils.registry import LOSS_REGISTRY
 from .losses import (CharbonnierLoss, GANLoss, L1Loss, MSELoss, PerceptualLoss, WeightedTVLoss, g_path_regularize,
                      gradient_penalty_loss, r1_penalty)
 

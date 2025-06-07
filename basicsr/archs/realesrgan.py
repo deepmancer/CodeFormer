@@ -1,17 +1,20 @@
-import cv2
+import logging
 import math
-import numpy as np
 import os
 import queue
 import threading
+
+import cv2
+import numpy as np
 import torch
 from torch.nn import functional as F
-from submodules.CodeFormer.basicsr.utils.download_util import load_file_from_url
-from submodules.CodeFormer.basicsr.utils.misc import get_device
 
-# ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-class RealESRGANer():
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+logger = logging.getLogger(__name__)
+
+class RealESRGANer:
     """A helper class for upsampling images with RealESRGAN.
 
     Args:
@@ -26,16 +29,19 @@ class RealESRGANer():
         half (float): Whether to use half precision during inference. Default: False.
     """
 
-    def __init__(self,
-                 scale,
-                 model_path,
-                 model=None,
-                 tile=0,
-                 tile_pad=10,
-                 pre_pad=10,
-                 half=False,
-                 device=None,
-                 gpu_id=None):
+    def __init__(
+        self,
+        scale,
+        model_path,
+        dni_weight=None,
+        model=None,
+        tile=0,
+        tile_pad=10,
+        pre_pad=10,
+        half=False,
+        device=None,
+        gpu_id=None,
+    ):
         self.scale = scale
         self.tile_size = tile
         self.tile_pad = tile_pad
@@ -44,34 +50,64 @@ class RealESRGANer():
         self.half = half
 
         # initialize model
-        # if gpu_id:
-        #     self.device = torch.device(
-        #         f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu') if device is None else device
-        # else:
-        #     self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') if device is None else device
-
-        self.device = get_device(gpu_id) if device is None else device
-        
-        # if the model_path starts with https, it will first download models to the folder: realesrgan/weights
-        if model_path.startswith('https://'):
-            model_path = load_file_from_url(
-                url=model_path, model_dir=os.path.join('weights/realesrgan'), progress=True, file_name=None)
-        loadnet = torch.load(model_path, map_location=torch.device('cpu'))
-        # prefer to use params_ema
-        if 'params_ema' in loadnet:
-            keyname = 'params_ema'
+        if gpu_id:
+            self.device = (
+                torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
+                if device is None
+                else device
+            )
         else:
-            keyname = 'params'
-        weights_to_load = loadnet[keyname] if keyname in loadnet else loadnet
-        model.load_state_dict(weights_to_load, strict=True)
+            self.device = (
+                torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                if device is None
+                else device
+            )
+
+        if isinstance(model_path, list):
+            # dni
+            assert len(model_path) == len(
+                dni_weight
+            ), "model_path and dni_weight should have the save length."
+            loadnet = self.dni(model_path[0], model_path[1], dni_weight)
+        else:
+            # if the model_path starts with https, it will first download models to the folder: weights
+            if model_path.startswith("https://"):
+                from basicsr.utils.download_util import load_file_from_url
+                model_path = load_file_from_url(
+                    model_path,
+                    model_dir=os.path.join(ROOT_DIR, "weights"),
+                )
+            loadnet = torch.load(model_path, map_location=torch.device("cpu"))
+
+        # prefer to use params_ema
+        if "params_ema" in loadnet:
+            keyname = "params_ema"
+            loadnet = loadnet[keyname]
+        elif "params" in loadnet:
+            keyname = "params"
+            loadnet = loadnet[keyname]
+        else:
+            loadnet = convert_realesrgan_state_dict(loadnet)
+        model.load_state_dict(loadnet, strict=True)
+
         model.eval()
         self.model = model.to(self.device)
         if self.half:
             self.model = self.model.half()
 
-    def pre_process(self, img):
-        """Pre-process, such as pre-pad and mod pad, so that the images can be divisible
+    def dni(self, net_a, net_b, dni_weight, key="params", loc="cpu"):
+        """Deep network interpolation.
+
+        ``Paper: Deep Network Interpolation for Continuous Imagery Effect Transition``
         """
+        net_a = torch.load(net_a, map_location=torch.device(loc))
+        net_b = torch.load(net_b, map_location=torch.device(loc))
+        for k, v_a in net_a[key].items():
+            net_a[key][k] = dni_weight[0] * v_a + dni_weight[1] * net_b[key][k]
+        return net_a
+
+    def pre_process(self, img):
+        """Pre-process, such as pre-pad and mod pad, so that the images can be divisible."""
         img = torch.from_numpy(np.transpose(img, (2, 0, 1))).float()
         self.img = img.unsqueeze(0).to(self.device)
         if self.half:
@@ -79,7 +115,7 @@ class RealESRGANer():
 
         # pre_pad
         if self.pre_pad != 0:
-            self.img = F.pad(self.img, (0, self.pre_pad, 0, self.pre_pad), 'reflect')
+            self.img = F.pad(self.img, (0, self.pre_pad, 0, self.pre_pad), "reflect")
         # mod pad for divisible borders
         if self.scale == 2:
             self.mod_scale = 2
@@ -88,11 +124,13 @@ class RealESRGANer():
         if self.mod_scale is not None:
             self.mod_pad_h, self.mod_pad_w = 0, 0
             _, _, h, w = self.img.size()
-            if (h % self.mod_scale != 0):
-                self.mod_pad_h = (self.mod_scale - h % self.mod_scale)
-            if (w % self.mod_scale != 0):
-                self.mod_pad_w = (self.mod_scale - w % self.mod_scale)
-            self.img = F.pad(self.img, (0, self.mod_pad_w, 0, self.mod_pad_h), 'reflect')
+            if h % self.mod_scale != 0:
+                self.mod_pad_h = self.mod_scale - h % self.mod_scale
+            if w % self.mod_scale != 0:
+                self.mod_pad_w = self.mod_scale - w % self.mod_scale
+            self.img = F.pad(
+                self.img, (0, self.mod_pad_w, 0, self.mod_pad_h), "reflect"
+            )
 
     def process(self):
         # model inference
@@ -113,7 +151,7 @@ class RealESRGANer():
         self.output = self.img.new_zeros(output_shape)
         tiles_x = math.ceil(width / self.tile_size)
         tiles_y = math.ceil(height / self.tile_size)
-
+        logger.debug(f"Tiling with {tiles_x}x{tiles_y} ({tiles_x*tiles_y}) tiles")
         # loop over all tiles
         for y in range(tiles_y):
             for x in range(tiles_x):
@@ -135,16 +173,16 @@ class RealESRGANer():
                 # input tile dimensions
                 input_tile_width = input_end_x - input_start_x
                 input_tile_height = input_end_y - input_start_y
-                tile_idx = y * tiles_x + x + 1
-                input_tile = self.img[:, :, input_start_y_pad:input_end_y_pad, input_start_x_pad:input_end_x_pad]
+                input_tile = self.img[
+                    :,
+                    :,
+                    input_start_y_pad:input_end_y_pad,
+                    input_start_x_pad:input_end_x_pad,
+                ]
 
                 # upscale tile
-                try:
-                    with torch.no_grad():
-                        output_tile = self.model(input_tile)
-                except RuntimeError as error:
-                    print('Error', error)
-                # print(f'\tTile {tile_idx}/{tiles_x * tiles_y}')
+                with torch.no_grad():
+                    output_tile = self.model(input_tile)
 
                 # output tile area on total image
                 output_start_x = input_start_x * self.scale
@@ -159,79 +197,94 @@ class RealESRGANer():
                 output_end_y_tile = output_start_y_tile + input_tile_height * self.scale
 
                 # put tile into output image
-                self.output[:, :, output_start_y:output_end_y,
-                            output_start_x:output_end_x] = output_tile[:, :, output_start_y_tile:output_end_y_tile,
-                                                                       output_start_x_tile:output_end_x_tile]
+                self.output[
+                    :, :, output_start_y:output_end_y, output_start_x:output_end_x
+                ] = output_tile[
+                    :,
+                    :,
+                    output_start_y_tile:output_end_y_tile,
+                    output_start_x_tile:output_end_x_tile,
+                ]
 
     def post_process(self):
         # remove extra pad
         if self.mod_scale is not None:
             _, _, h, w = self.output.size()
-            self.output = self.output[:, :, 0:h - self.mod_pad_h * self.scale, 0:w - self.mod_pad_w * self.scale]
+            self.output = self.output[
+                :,
+                :,
+                0 : h - self.mod_pad_h * self.scale,
+                0 : w - self.mod_pad_w * self.scale,
+            ]
         # remove prepad
         if self.pre_pad != 0:
             _, _, h, w = self.output.size()
-            self.output = self.output[:, :, 0:h - self.pre_pad * self.scale, 0:w - self.pre_pad * self.scale]
+            self.output = self.output[
+                :,
+                :,
+                0 : h - self.pre_pad * self.scale,
+                0 : w - self.pre_pad * self.scale,
+            ]
         return self.output
 
     @torch.no_grad()
-    def enhance(self, img, outscale=None, alpha_upsampler='realesrgan'):
+    def enhance(self, img, outscale=None, alpha_upsampler="realesrgan"):
         h_input, w_input = img.shape[0:2]
         # img: numpy
         img = img.astype(np.float32)
         if np.max(img) > 256:  # 16-bit image
             max_range = 65535
-            print('\tInput is a 16-bit image')
+            print("\tInput is a 16-bit image")
         else:
             max_range = 255
         img = img / max_range
         if len(img.shape) == 2:  # gray image
-            img_mode = 'L'
+            img_mode = "L"
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
         elif img.shape[2] == 4:  # RGBA image with alpha channel
-            img_mode = 'RGBA'
+            img_mode = "RGBA"
             alpha = img[:, :, 3]
             img = img[:, :, 0:3]
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            if alpha_upsampler == 'realesrgan':
+            if alpha_upsampler == "realesrgan":
                 alpha = cv2.cvtColor(alpha, cv2.COLOR_GRAY2RGB)
         else:
-            img_mode = 'RGB'
+            img_mode = "RGB"
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
         # ------------------- process image (without the alpha channel) ------------------- #
-        try:
-            with torch.no_grad():
-                self.pre_process(img)
-                if self.tile_size > 0:
-                    self.tile_process()
-                else:
-                    self.process()
-                output_img_t = self.post_process()
-                output_img = output_img_t.data.squeeze().float().cpu().clamp_(0, 1).numpy()
-                output_img = np.transpose(output_img[[2, 1, 0], :, :], (1, 2, 0))
-                if img_mode == 'L':
-                    output_img = cv2.cvtColor(output_img, cv2.COLOR_BGR2GRAY)
-            del output_img_t
-            torch.cuda.empty_cache()        
-        except RuntimeError as error:
-            print(f"Failed inference for RealESRGAN: {error}")      
+        self.pre_process(img)
+        if self.tile_size > 0:
+            self.tile_process()
+        else:
+            self.process()
+        output_img = self.post_process()
+        output_img = output_img.data.squeeze().float().cpu().clamp_(0, 1).numpy()
+        output_img = np.transpose(output_img[[2, 1, 0], :, :], (1, 2, 0))
+        if img_mode == "L":
+            output_img = cv2.cvtColor(output_img, cv2.COLOR_BGR2GRAY)
 
         # ------------------- process the alpha channel if necessary ------------------- #
-        if img_mode == 'RGBA':
-            if alpha_upsampler == 'realesrgan':
+        if img_mode == "RGBA":
+            if alpha_upsampler == "realesrgan":
                 self.pre_process(alpha)
                 if self.tile_size > 0:
                     self.tile_process()
                 else:
                     self.process()
                 output_alpha = self.post_process()
-                output_alpha = output_alpha.data.squeeze().float().cpu().clamp_(0, 1).numpy()
+                output_alpha = (
+                    output_alpha.data.squeeze().float().cpu().clamp_(0, 1).numpy()
+                )
                 output_alpha = np.transpose(output_alpha[[2, 1, 0], :, :], (1, 2, 0))
                 output_alpha = cv2.cvtColor(output_alpha, cv2.COLOR_BGR2GRAY)
             else:  # use the cv2 resize for alpha channel
                 h, w = alpha.shape[0:2]
-                output_alpha = cv2.resize(alpha, (w * self.scale, h * self.scale), interpolation=cv2.INTER_LINEAR)
+                output_alpha = cv2.resize(
+                    alpha,
+                    (w * self.scale, h * self.scale),
+                    interpolation=cv2.INTER_LINEAR,
+                )
 
             # merge the alpha channel
             output_img = cv2.cvtColor(output_img, cv2.COLOR_BGR2BGRA)
@@ -245,10 +298,13 @@ class RealESRGANer():
 
         if outscale is not None and outscale != float(self.scale):
             output = cv2.resize(
-                output, (
+                output,
+                (
                     int(w_input * outscale),
                     int(h_input * outscale),
-                ), interpolation=cv2.INTER_LANCZOS4)
+                ),
+                interpolation=cv2.INTER_LANCZOS4,
+            )
 
         return output, img_mode
 
@@ -284,7 +340,6 @@ class PrefetchReader(threading.Thread):
 
 
 class IOConsumer(threading.Thread):
-
     def __init__(self, opt, que, qid):
         super().__init__()
         self._queue = que
@@ -294,10 +349,39 @@ class IOConsumer(threading.Thread):
     def run(self):
         while True:
             msg = self._queue.get()
-            if isinstance(msg, str) and msg == 'quit':
+            if isinstance(msg, str) and msg == "quit":
                 break
 
-            output = msg['output']
-            save_path = msg['save_path']
+            output = msg["output"]
+            save_path = msg["save_path"]
             cv2.imwrite(save_path, output)
-        print(f'IO worker {self.qid} is done.')
+        print(f"IO worker {self.qid} is done.")
+
+
+def convert_realesrgan_state_dict(state_dict):
+    new_state_dict = {}
+
+    new_state_dict["conv_first.weight"] = state_dict.pop("model.0.weight")
+    new_state_dict["conv_first.bias"] = state_dict.pop("model.0.bias")
+    #    "model.1.sub.21.RDB3.conv5.0.weight => body.21.rdb1.conv3.weight"
+
+    for k, v in list(state_dict.items()):
+        parts = k.split(".")
+        if len(parts) == 8 and parts[0] == "model":
+            new_parts = ["body", parts[3], parts[4].lower(), parts[5], parts[7]]
+            new_k = ".".join(new_parts)
+            new_state_dict[new_k] = state_dict.pop(k)
+
+    new_state_dict["conv_body.weight"] = state_dict.pop("model.1.sub.23.weight")
+    new_state_dict["conv_body.bias"] = state_dict.pop("model.1.sub.23.bias")
+    new_state_dict["conv_up1.weight"] = state_dict.pop("model.3.weight")
+    new_state_dict["conv_up1.bias"] = state_dict.pop("model.3.bias")
+    new_state_dict["conv_up2.weight"] = state_dict.pop("model.6.weight")
+    new_state_dict["conv_up2.bias"] = state_dict.pop("model.6.bias")
+    new_state_dict["conv_hr.weight"] = state_dict.pop("model.8.weight")
+    new_state_dict["conv_hr.bias"] = state_dict.pop("model.8.bias")
+
+    new_state_dict["conv_last.weight"] = state_dict.pop("model.10.weight")
+    new_state_dict["conv_last.bias"] = state_dict.pop("model.10.bias")
+
+    return new_state_dict
