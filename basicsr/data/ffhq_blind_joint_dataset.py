@@ -8,11 +8,11 @@ import torch
 import torch.utils.data as data
 from torchvision.transforms.functional import (adjust_brightness, adjust_contrast, 
                                         adjust_hue, adjust_saturation, normalize)
-from submodules.CodeFormer.basicsr.data import gaussian_kernels as gaussian_kernels
-from submodules.CodeFormer.basicsr.data.transforms import augment
-from submodules.CodeFormer.basicsr.data.data_util import paths_from_folder
-from submodules.CodeFormer.basicsr.utils import FileClient, get_root_logger, imfrombytes, img2tensor
-from submodules.CodeFormer.basicsr.utils.registry import DATASET_REGISTRY
+from modules.CodeFormer.basicsr.data import gaussian_kernels as gaussian_kernels
+from modules.CodeFormer.basicsr.data.transforms import augment
+from modules.CodeFormer.basicsr.data.data_util import paths_from_folder
+from modules.CodeFormer.basicsr.utils import FileClient, get_root_logger, imfrombytes, img2tensor
+from modules.CodeFormer.basicsr.utils.registry import DATASET_REGISTRY
 
 @DATASET_REGISTRY.register()
 class FFHQBlindJointDataset(data.Dataset):

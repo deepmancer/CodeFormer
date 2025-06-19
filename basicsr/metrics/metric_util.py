@@ -1,6 +1,6 @@
 import numpy as np
 
-from submodules.CodeFormer.basicsr.utils.matlab_functions import bgr2ycbcr
+from modules.CodeFormer.basicsr.utils.matlab_functions import bgr2ycbcr
 
 
 def reorder_image(img, input_order='HWC'):

@@ -1,6 +1,6 @@
 from copy import deepcopy
 
-from submodules.CodeFormer.basicsr.utils.registry import METRIC_REGISTRY
+from modules.CodeFormer.basicsr.utils.registry import METRIC_REGISTRY
 from .psnr_ssim import calculate_psnr, calculate_ssim
 
 __all__ = ['calculate_psnr', 'calculate_ssim']

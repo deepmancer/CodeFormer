@@ -6,8 +6,8 @@ import queue
 import threading
 import torch
 from torch.nn import functional as F
-from submodules.CodeFormer.basicsr.utils.download_util import load_file_from_url
-from submodules.CodeFormer.basicsr.utils.misc import get_device
+from modules.CodeFormer.basicsr.utils.download_util import load_file_from_url
+from modules.CodeFormer.basicsr.utils.misc import get_device
 
 # ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

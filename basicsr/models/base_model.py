@@ -5,8 +5,8 @@ from collections import OrderedDict
 from copy import deepcopy
 from torch.nn.parallel import DataParallel, DistributedDataParallel
 
-from submodules.CodeFormer.basicsr.models import lr_scheduler as lr_scheduler
-from submodules.CodeFormer.basicsr.utils.dist_util import master_only
+from modules.CodeFormer.basicsr.models import lr_scheduler as lr_scheduler
+from modules.CodeFormer.basicsr.utils.dist_util import master_only
 
 logger = logging.getLogger('basicsr')
 
