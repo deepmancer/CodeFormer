@@ -3,9 +3,9 @@ import torch
 from torch import nn
 from copy import deepcopy
 
-from facelib.utils import load_file_from_url
-from facelib.utils import download_pretrained_models
-from facelib.detection.yolov5face.models.common import Conv
+from modules.CodeFormer.facelib.utils import load_file_from_url
+from modules.CodeFormer.facelib.utils import download_pretrained_models
+from modules.CodeFormer.facelib.detection.yolov5face.models.common import Conv
 
 from .retinaface.retinaface import RetinaFace
 from .yolov5face.face_detector import YoloDetector

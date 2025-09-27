@@ -4,9 +4,9 @@ import os
 import torch
 from torchvision.transforms.functional import normalize
 
-from facelib.detection import init_detection_model
-from facelib.parsing import init_parsing_model
-from facelib.utils.misc import img2tensor, imwrite, is_gray, bgr2gray, adain_npy
+from modules.CodeFormer.facelib.detection import init_detection_model
+from modules.CodeFormer.facelib.parsing import init_parsing_model
+from modules.CodeFormer.facelib.utils.misc import img2tensor, imwrite, is_gray, bgr2gray, adain_npy
 from modules.CodeFormer.basicsr.utils.download_util import load_file_from_url
 from modules.CodeFormer.basicsr.utils.misc import get_device
 

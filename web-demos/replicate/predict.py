@@ -20,7 +20,7 @@ from modules.CodeFormer.basicsr.utils.realesrgan_utils import RealESRGANer
 from modules.CodeFormer.basicsr.utils.misc import gpu_is_available
 from modules.CodeFormer.basicsr.utils.registry import ARCH_REGISTRY
 
-from facelib.utils.face_restoration_helper import FaceRestoreHelper
+from modules.CodeFormer.facelib.utils.face_restoration_helper import FaceRestoreHelper
 
 class Predictor(BasePredictor):
     def setup(self):
